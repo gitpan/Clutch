@@ -6,6 +6,7 @@ build_requires:
   ExtUtils::MakeMaker: 6.62
   Test::More: 0.88
   Test::Requires: 0.06
+  Test::TCP: 1.14
 configure_requires:
   ExtUtils::MakeMaker: 6.62
 distribution_type: module
@@ -29,4 +30,4 @@ requires:
 resources:
   license: http://dev.perl.org/licenses/
   repository: git://github.com/nekokak/p5-Clutch.git
-version: 0.01
+version: 0.02
