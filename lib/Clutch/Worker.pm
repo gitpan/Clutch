@@ -13,9 +13,10 @@ our @EXPORT = qw(
     setup_listener
     accept_loop
     handle_connection
-    dispatch
-    register_admin
     register_function
+    dispatch
+    do_request
+    do_request_background
 );
 
 my $FUNCTIONS = +{};
@@ -26,7 +27,6 @@ sub new {
 
     %args = (
         address              => undef,
-        admin_address        => undef,
         functions            => $FUNCTIONS,
         timeout              => 10,
         max_workers          => 0,
@@ -38,9 +38,6 @@ sub new {
 
     my $self = bless \%args, $class;
 
-    if ($self->{admin_address}) {
-        $self->register_admin();
-    }
     $self;
 }
 
@@ -65,13 +62,13 @@ sub run {
     my $self = shift;
     $self->setup_listener();
 
-    if ($self->{max_workers} != 0) {                                                                                                                                                                                                          
-        my %pm_args = (                                                                                                                                                                                                                       
-            max_workers => $self->{max_workers},                                                                                                                                                                                              
-            trap_signals => {                                                                                                                                                                                                                 
-                TERM => 'TERM',                                                                                                                                                                                                               
-                HUP  => 'TERM',                                                                                                                                                                                                               
-            },                                                                                                                                                                                                                                
+    if ($self->{max_workers} != 0) {
+        my %pm_args = (
+            max_workers => $self->{max_workers},
+            trap_signals => {
+                TERM => 'TERM',
+                HUP  => 'TERM',
+            },
         );
         if (defined $self->{spawn_interval}) {
             $pm_args{trap_signals}{USR1} = [ 'TERM', $self->{spawn_interval} ];
@@ -114,8 +111,6 @@ sub accept_loop {
                 or die "setsockopt(TCP_NODELAY) failed:$!";
 
             $self->handle_connection($conn);
-
-            $conn->close;
         }
     }
 }
@@ -132,52 +127,57 @@ sub handle_connection {
         ) or return;
 
         Clutch::Util::parse_read_buffer($buf, $req)
-            and last;
+          and last;
     }
 
-    my $res = $self->dispatch($req);
-
-    Clutch::Util::write_all($conn, $res . $CRLF x 2, $self->{timeout}, $self);
+    if (Clutch::Util::support_cmd($req->{cmd})) {
+        my $cmd_method = 'do_' . $req->{cmd};
+        $self->$cmd_method($conn, $req);
+    }
+    else {
+        $self->do_error($conn, $req);
+    }
 
     return;
 }
 
-sub dispatch {
-    my ($self, $req) = @_;
-
-    my $code = $self->{functions}->{$req->{function}}
-        or return "ERROR: unknow function";
-    my $res = $code->($req->{args});
-    return $res ? $res : "\0";
+sub do_error {
+    my ($self, $conn, $req) = @_;
+    Clutch::Util::write_all($conn, "CLIENT_ERROR: unknow command$CRLF", $self->{timeout}, $self);
+    $conn->close();
 }
 
-sub register_admin {
-    my $self = shift;
+sub do_request {
+    my ($self, $conn, $req) = @_;
 
-    my $sock = Clutch::Util::new_client($self->{admin_address});
+    my $code = $self->{functions}->{$req->{function}};
 
-    my $msg = join($CRLF, 'register', $self->{address} .'=100') . $CRLF x 2;
-    Clutch::Util::write_all($sock, $msg, $self->{timeout}, $self);
+    my $res = $code ? ($code->($req->{args}) || $NULL)
+                    : "ERROR: unknow function";
 
-    my $buf='';
-    while (1) {
-        my $rlen = Clutch::Util::read_timeout(
-            $sock, \$buf, $MAX_REQUEST_SIZE - length($buf), length($buf), $self->{timeout}, $self
-        ) or return;
+    my $json = $res eq $NULL ? $NULL : Clutch::Util::json->encode($res);
+    Clutch::Util::write_all($conn, $json . $CRLF, $self->{timeout}, $self);
 
-        Clutch::Util::verify_buffer($buf) and do {
-            Clutch::Util::trim_buffer(\$buf);
-            last;
-        }
-    }
-    $sock->close();
-
-    unless ($buf eq 'OK') {
-        die "can't set worker address for admin server";
-    }
+    $conn->close();
 }
- 
-sub register_function ($$) {
+
+sub do_request_background {
+    my ($self, $conn, $req) = @_;
+
+    my $code = $self->{functions}->{$req->{function}};
+
+    my $res = $code ? "OK" : "ERROR: unknow function";
+
+    my $json = Clutch::Util::json->encode($res);
+    Clutch::Util::write_all($conn, $json . $CRLF, $self->{timeout}, $self);
+    $conn->close();
+
+    $code && $code->($req->{args});
+
+    return;
+}
+
+sub register_function ($$) { ## no critic
     my ($function, $code) = @_;
     $FUNCTIONS->{$function} = $code;
 }
@@ -258,10 +258,6 @@ $callback_coderef's first argument is a client request parameter.
 =item $opts{address}
 
 worker process listen address.
-
-=item $opts{admin_address}
-
-worker process can tells itself address for admin daemon, if admin daemon starting.
 
 =item $opts{timeout}
 

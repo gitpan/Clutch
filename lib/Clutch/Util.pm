@@ -5,11 +5,21 @@ use parent qw(Exporter);
 use IO::Socket::INET;
 use POSIX qw(EINTR EAGAIN EWOULDBLOCK);
 use Socket qw(IPPROTO_TCP TCP_NODELAY);
+use JSON::XS ();
 
-our $CRLF = "\x0d\x0a";
+our $CRLF      = "\x0d\x0a";
+our $DELIMITER = "\x20";
+our $NULL      = "\x00";
 our $MAX_REQUEST_SIZE = 131072;
 
-our @EXPORT = qw($CRLF $MAX_REQUEST_SIZE);
+our @EXPORT = qw($CRLF $DELIMITER $NULL $MAX_REQUEST_SIZE);
+
+our %CMD2NO = (
+    'request'            => 1,
+    'request_background' => 1,
+    'request_multi'      => 1,
+);
+our $JSON;
 
 sub new_client {
     my $address = shift;
@@ -24,15 +34,22 @@ sub new_client {
     $sock;
 }
 
-# double line break indicates end of header; parse it
+sub json {
+    $JSON ||= JSON::XS->new->allow_nonref;
+}
+
+sub support_cmd {
+    $CMD2NO{+shift};
+}
+
 sub verify_buffer {
     my $buf = shift;
-    $buf =~ /^(.*?$CRLF$CRLF)/s ? 1 : 0;
+    $buf =~ /$CRLF$/o ? 1 : 0;
 }
 
 sub trim_buffer {
     my $buf = shift;
-    $$buf =~ s/$CRLF$CRLF$//;
+    $$buf =~ s/$CRLF$//o;
 }
 
 sub parse_read_buffer {
@@ -40,7 +57,9 @@ sub parse_read_buffer {
 
     if ( verify_buffer($buf) ) {
         trim_buffer(\$buf);
-        ($ret->{function}, $ret->{args}) = split $CRLF, $buf;
+        ($ret->{cmd}, $ret->{function}, $ret->{args}) = split /$DELIMITER+/o, $buf;
+        $ret->{args} ||= '';
+        $ret->{args} = json->decode($ret->{args});
         return 1;
     }
 

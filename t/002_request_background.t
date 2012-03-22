@@ -10,30 +10,24 @@ test_tcp(
     client => sub {
         my ($port, $server_pid) = @_;
         my $client = Clutch::Client->new(
-            servers => ['127.0.0.1:'.$port]
+            servers => ['127.0.0.1:'.$port],
         );
 
         my $res;
         {
-            $res = $client->request('function_name', 'args');
+            $res = $client->request_background('function_name', 'args');
             note $res;
-            is_deeply $res, +{response => 'args'};
+            is $res, "OK";
         }
 
         {
-            $res = $client->request('function_name', +{name => 'nekokak'});
+            $res = $client->request_background('foo', 'args');
             note $res;
-            is_deeply $res, +{response => +{name => 'nekokak'}};
+            is $res, "OK";
         }
 
         {
-            $res = $client->request('foo', 'args');
-            note $res;
-            ok not $res;
-        }
-
-        {
-            $res = $client->request('func', 'not_found');
+            $res = $client->request_background('func', 'not_found');
             note $res;
             is $res, 'ERROR: unknow function';
         }
