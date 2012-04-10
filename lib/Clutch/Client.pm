@@ -1,7 +1,7 @@
 package Clutch::Client;
 use strict;
 use warnings;
-use Clutch::Util;
+use Clutch::Utils;
 use IO::Select;
 use Carp ();
 
@@ -35,25 +35,21 @@ sub _request {
     my ($self, $cmd_name, $function, $args) = @_;
 
     my $server = $self->{rr}->next;
-    my $sock = Clutch::Util::new_client($server);
+    my $sock = Clutch::Utils::new_client($server);
 
-    my $json_args = Clutch::Util::json->encode($args);
-    my $msg = join($DELIMITER, $cmd_name, $function, $json_args) . $CRLF;
-    Clutch::Util::write_all($sock, $msg, $self->{timeout}, $self);
+    my $msg = Clutch::Utils::make_request($cmd_name, $function, $args);
+    Clutch::Utils::write_all($sock, $msg, $self->{timeout}, $self);
 
     my $buf='';
     while (1) {
-        my $rlen = Clutch::Util::read_timeout(
+        my $rlen = Clutch::Utils::read_timeout(
             $sock, \$buf, $MAX_REQUEST_SIZE - length($buf), length($buf), $self->{timeout}, $self
         ) or return;
 
-        Clutch::Util::verify_buffer($buf) and do {
-            Clutch::Util::trim_buffer(\$buf);
-            last;
-        }
+        Clutch::Utils::verify_buffer($buf) and last;
     }
     $sock->close();
-    return $buf eq $NULL ? undef : Clutch::Util::json->decode($buf);
+    return $buf ? Clutch::Utils::json->decode($buf) : undef;
 }
 
 sub request_multi {
@@ -87,13 +83,12 @@ sub _request_multi {
     my %sockets_map;
     for my $i (0 .. ($request_count - 1)) {
         my $server = $self->{rr}->next;
-        my $sock = Clutch::Util::new_client($server);
+        my $sock = Clutch::Utils::new_client($server);
         $is->add($sock);
         $sockets_map{$sock}=$i;
 
-        my $json_args = Clutch::Util::json->encode(($args->[$i]->{args}||''));
-        my $msg = join($DELIMITER, $cmd_name, $args->[$i]->{function}, $json_args) . $CRLF;
-        Clutch::Util::write_all($sock, $msg, $self->{timeout}, $self);
+        my $msg = Clutch::Utils::make_request($cmd_name, $args->[$i]->{function}, ($args->[$i]->{args}||''));
+        Clutch::Utils::write_all($sock, $msg, $self->{timeout}, $self);
     }
 
     my @res;
@@ -102,14 +97,11 @@ sub _request_multi {
             for my $sock (@ready) {
                 my $buf='';
                 while (1) {
-                    my $rlen = Clutch::Util::read_timeout(
+                    my $rlen = Clutch::Utils::read_timeout(
                         $sock, \$buf, $MAX_REQUEST_SIZE - length($buf), length($buf), $self->{timeout}, $self
                     ) or return;
 
-                    Clutch::Util::verify_buffer($buf) and do {
-                        Clutch::Util::trim_buffer(\$buf);
-                        last;
-                    }
+                    Clutch::Utils::verify_buffer($buf) and last;
                 }
                 my $idx = $sockets_map{$sock};
 
@@ -117,7 +109,7 @@ sub _request_multi {
                 $is->remove($sock);
                 $sock->close();
 
-                $res[$idx] = $buf eq $NULL ? undef : Clutch::Util::json->decode($buf);
+                $res[$idx] = $buf ? Clutch::Utils::json->decode($buf) : undef;
             }
         }
     }
@@ -258,10 +250,6 @@ worker response here.
 The result is order request.
 
 =back
-
-=head1 SEE ALSO
-
-L<Data::WeightedRoundRobin>
 
 =cut
 

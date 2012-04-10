@@ -4,7 +4,7 @@ use warnings;
 use parent qw(Exporter);
 use IO::Socket::INET;
 use Socket qw(IPPROTO_TCP TCP_NODELAY);
-use Clutch::Util;
+use Clutch::Utils;
 use Parallel::Prefork;
 
 our @EXPORT = qw(
@@ -17,9 +17,11 @@ our @EXPORT = qw(
     dispatch
     do_request
     do_request_background
+    cascade
 );
 
 my $FUNCTIONS = +{};
+my $CONTEXT;
 
 sub new {
     my $class = shift;
@@ -37,7 +39,7 @@ sub new {
     );
 
     my $self = bless \%args, $class;
-
+    $CONTEXT = $self;
     $self;
 }
 
@@ -122,15 +124,15 @@ sub handle_connection {
     my $req = +{};
 
     while (1) {
-        my $rlen = Clutch::Util::read_timeout(
+        my $rlen = Clutch::Utils::read_timeout(
             $conn, \$buf, $MAX_REQUEST_SIZE - length($buf), length($buf), $self->{timeout}, $self
         ) or return;
 
-        Clutch::Util::parse_read_buffer($buf, $req)
+        Clutch::Utils::parse_read_buffer($buf, $req)
           and last;
     }
 
-    if (Clutch::Util::support_cmd($req->{cmd})) {
+    if (Clutch::Utils::support_cmd($req->{cmd})) {
         my $cmd_method = 'do_' . $req->{cmd};
         $self->$cmd_method($conn, $req);
     }
@@ -143,7 +145,7 @@ sub handle_connection {
 
 sub do_error {
     my ($self, $conn, $req) = @_;
-    Clutch::Util::write_all($conn, "CLIENT_ERROR: unknow command$CRLF", $self->{timeout}, $self);
+    Clutch::Utils::write_all($conn, Clutch::Utils::make_response('CLIENT_ERROR: unknow command'), $self->{timeout}, $self);
     $conn->close();
 }
 
@@ -151,12 +153,10 @@ sub do_request {
     my ($self, $conn, $req) = @_;
 
     my $code = $self->{functions}->{$req->{function}};
+    my $res  = $code ? ($code->($req->{args}) || '')
+                     : "ERROR: unknow function";
 
-    my $res = $code ? ($code->($req->{args}) || $NULL)
-                    : "ERROR: unknow function";
-
-    my $json = $res eq $NULL ? $NULL : Clutch::Util::json->encode($res);
-    Clutch::Util::write_all($conn, $json . $CRLF, $self->{timeout}, $self);
+    Clutch::Utils::write_all($conn, Clutch::Utils::make_response($res), $self->{timeout}, $self);
 
     $conn->close();
 }
@@ -165,16 +165,21 @@ sub do_request_background {
     my ($self, $conn, $req) = @_;
 
     my $code = $self->{functions}->{$req->{function}};
+    my $res  = $code ? "OK" : "ERROR: unknow function";
 
-    my $res = $code ? "OK" : "ERROR: unknow function";
-
-    my $json = Clutch::Util::json->encode($res);
-    Clutch::Util::write_all($conn, $json . $CRLF, $self->{timeout}, $self);
+    Clutch::Utils::write_all($conn, Clutch::Utils::make_response($res), $self->{timeout}, $self);
     $conn->close();
 
     $code && $code->($req->{args});
 
     return;
+}
+
+sub cascade {
+    my ($function, $args) = @_;
+
+    my $code = $CONTEXT->{functions}->{$function};
+    $code ? ($code->($args) || '') : "ERROR: unknow function";
 }
 
 sub register_function ($$) { ## no critic
@@ -246,6 +251,22 @@ client process specific this functin name.
 client process call the function, execute thid $callback_coderef.
 
 $callback_coderef's first argument is a client request parameter.
+
+=back
+
+=head2 cascade($function_name, $args);
+
+call self worker function.
+
+=over
+
+=item $function_name
+
+worker process function name.
+
+=item $args
+
+worker argument.
 
 =back
 

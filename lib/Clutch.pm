@@ -3,7 +3,7 @@ use 5.008_001;
 use strict;
 use warnings;
 
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 
 1;
 __END__
@@ -45,9 +45,7 @@ Clutch - distributed job system
     use Clutch::Client;
     my $args = shift || die 'missing args';
     my $client = Clutch::Client->new(
-        servers => [
-            +{ address => "$worker_ip:$worker_port" },
-        ],
+        servers => [ "$worker_ip:$worker_port" ],
     );
     my $res = $client->request('echo', $args);
     print $res, "\n";
@@ -64,11 +62,13 @@ the worker process itself receives a request.
 
 L<Parallel::Prefork>
 
-=head1 BUGS
+=head1 BUGS & SUPPORT
 
 All complex software has bugs lurking in it, and this module is no
 exception. If you find a bug please either email me, or add the bug
 to cpan-RT.
+
+irc: #qudo@irc.perl.org
 
 =head1 SEE ALSO
 
